@@ -281,7 +281,7 @@ else:
 torch.save(theta_all, '%s/theta_all.t7' % (opt.outf))
 
 # Ensure that validation iid error on restricted is approx the same
-compare_networks(theta_star, theta_all, data=None) # TODO fix the data to restricted test
+compare_networks(theta_star, theta_all, data=None)  # TODO fix the data to restricted test
 
 ## Main experiment: twin study
 # for growing epsilon noise:
@@ -295,16 +295,18 @@ compare_networks(theta_star, theta_all, data=None) # TODO fix the data to restri
 
 epsilons_to_test = [i * 0.1 for i in range(5)]
 
+
 for eps in epsilons_to_test:
-    theta_star_eps = add_noise_weights(theta_star)
-    theta_all_eps  = add_noise_weights(theta_all)
+    theta_star_eps = add_noise_weights(theta_star.clone())
+    theta_all_eps  = add_noise_weights(theta_all.clone())
 
     for split in [split_1, split_2]:
-        th_star_twin  = theta_star_eps.clone()
+        th_star_twin = theta_star_eps.clone()
+        th_all_twin  = theta_all_eps.clone()
         if opt.task == 'classification':
             # Train theta on the set of the data
-            train_classifier(theta_all, distribution=split, iterations=100)
-
+            train_classifier(th_star_twin, distribution=split, iterations=100)
+            train_classifier(th_all_twin, distribution=split, iterations=100)
         else:
             pass
 

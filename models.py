@@ -84,7 +84,7 @@ class VAE(nn.Module):
         return sample
 
     def init_weights(self):
-        self.apply(self.init_weights)
+        self.apply(self.init_weights_dist)
 
     def init_weights_dist(self, m):
         if type(m) == nn.Linear:

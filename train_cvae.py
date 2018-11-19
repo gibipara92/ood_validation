@@ -17,6 +17,8 @@ parser.add_argument('--batch-size', type=int, default=128, metavar='N',
                     help='input batch size for training (default: 132)')
 parser.add_argument('--epochs', type=int, default=10, metavar='N',
                     help='number of epochs to train (default: 10)')
+parser.add_argument('--beta', type=float, default=1.,
+                    help='beta term as in beta VAE')
 parser.add_argument('--no-cuda', action='store_true', default=False,
                     help='enables CUDA training')
 parser.add_argument('--seed', type=int, default=1, metavar='S',
@@ -68,7 +70,7 @@ model = VAE(device=device)
 model.to(device)
 
 
-def loss_function(recon_x, x, mu, logvar):
+def loss_function(recon_x, x, mu, logvar, beta=1.0):
     BCE = F.binary_cross_entropy(recon_x, x.view(-1, 32*32))
 
     # see Appendix B from VAE paper:
@@ -79,7 +81,7 @@ def loss_function(recon_x, x, mu, logvar):
     # Normalise by same number of elements as in reconstruction
     KLD /= args.batch_size * 32*32
 
-    return BCE + KLD
+    return BCE + beta * KLD
 
 
 optimizer = optim.Adam(model.parameters(), lr=1e-3)
@@ -97,7 +99,7 @@ def train(epoch):
         targets = targets.to(device)
         optimizer.zero_grad()
         recon_batch, mu, logvar = model(data, targets)
-        loss = loss_function(recon_batch, data, mu, logvar)
+        loss = loss_function(recon_batch, data, mu, logvar, beta=args.beta)
         loss.backward()
         train_loss += loss.data[0]
         optimizer.step()
@@ -119,7 +121,7 @@ def test(epoch):
             data = data.to(device)
             targets = targets.to(device)
             recon_batch, mu, logvar = model(data, targets)
-            test_loss += loss_function(recon_batch, data, mu, logvar).item()
+            test_loss += loss_function(recon_batch, data, mu, logvar, beta=args.beta).item()
             if i == 0:
                 n = min(data.size(0), 8)
                 comparison = torch.cat([data[:n], recon_batch.view(args.batch_size, 1, 32, 32)[:n]])
