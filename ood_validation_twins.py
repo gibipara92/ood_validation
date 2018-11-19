@@ -1,6 +1,6 @@
 from __future__ import print_function
 import argparse
-import os
+import os, sys
 import random
 import copy
 import torch
@@ -171,19 +171,31 @@ class Ground_truth():
             # This restricts the value to the hypercube of side length 1.0
             z = Variable(0.5 - torch.rand(n, self.net.lat_dim)).to(self.device)
 
-        if distribution is [0, 1]:
+        if distribution is split_1:
             z[:,0] = torch.abs(z[:,0])
-        elif distribution is [-1, 0]:
+        elif distribution is split_2:
             z[:,0] = -torch.abs(z[:,0])
-        else:
+        elif distribution is restrict_gaussian_range:
             # No need to do anything in this case, will be in the hypercube
             pass
+        else:
+            print('Error in sample distribution, unknown distribution:', distribution)
+            sys.exit(1)
 
         return self.sample(n, z, c)
 
     def sample(self, n, z=None, c=None):
         return self.net.sample(n, z, c)
 
+
+# Train the cvae if not already trained, otherwise load it
+data_generator = Ground_truth()
+# data_generator.load_state_dict(torch.load(opt.c_vae_path))
+
+# Creat fixed sets of test data for the two splits
+split_1_test_img, split_1_test_c = data_generator.sample_distribution(n=512, distribution=split_1)
+split_2_test_img, split_2_test_c = data_generator.sample_distribution(n=512, distribution=split_2)
+test_all_img, test_all_c         = torch.cat(split_1_test_img, split_2_test_img), torch.cat(split_1_test_c, split_2_test_c)
 
 # fixed_x_train_non_iid, fixed_y_train_non_iid = torch.Tensor(
 #     ground_truth.sample(x_range=non_iid_training_range, n=1024, sample_grid=True)).to(device)
@@ -243,7 +255,6 @@ def train_classifier(net, distribution, iterations, optimizer=None):
     net.train()
     it = 0
     while it < iterations:
-        # TODO incorporate distribution into next line
         data, target = data_generator.sample_distribution(n=256, distribution=distribution)
         it += 1
         net.curr_iteration += 1
@@ -260,18 +271,20 @@ def train_classifier(net, distribution, iterations, optimizer=None):
                        100. * net.curr_iteration / net.curr_iteration, loss.item()))
 
 
-
 def validate_all(net, append_results=True):
     """Returns validation scores for net on the given distribution
     Returns validation scores first on split_1, then split_2
     """
     net.eval()
-    valid_err_split_1 = 0 # TODO, use some standard fixed data from the two splits to compute this
+
+    valid_err_split_1 = net()
     valid_err_split_2 = 0 # TODO
+
     if append_results:
         net.valid_err_split_1.append(valid_err_split_1)
         net.valid_err_split_2.append(valid_err_split_2)
         net.valid_err_iterations.append(net.curr_iteration)
+
     return valid_err_split_1, valid_err_split_2
 
 
@@ -287,8 +300,6 @@ def train_twins(net, iterations):
     # Will store here the disagreemnet between the two twins
     disagreement_error = []
 
-    # TODO we should be comparing the two nets all the time while training, not only at the end of training
-    # TODO so that we can plot how the two twins get 'back together' for the nice case as we train
     if opt.task == 'classification':
         disagreement_error.append([net_twin_1.curr_iteration, compare_networks(net_twin_1, net_twin_2, data=restrict_gaussian_range)])
         for i in range(40):
@@ -304,16 +315,14 @@ def train_twins(net, iterations):
 def compare_networks(net1, net2, data):
     """ Compare performance of net1 and net2 on a given set of data, by comparing the average error between the
     predictions of the two. Returns the average cross error"""
-    # TODO: data will be the range of the distrivution to use?
     net1.eval()
     net2.eval()
 
     out1 = net1(data)
     out2 = net2(data)
 
-    error = 0  # TODO: error = F.mse(out1, out2)
-    # Print error
-    return error
+    discrepancy_error = F.mse_loss(out1, out2, size_average=True)
+    return discrepancy_error
 
 
 def add_noise_weights(net, eps_sigma):
@@ -332,9 +341,6 @@ def add_noise_weights(net, eps_sigma):
 ### Pre-setting
 #########################
 
-# Train the cvae if not already trained, otherwise load it
-data_generator = Ground_truth()
-# data_generator.load_state_dict(torch.load(opt.c_vae_path))
 
 # Init and train theta_star on all of the data from the cvae
 if opt.task == 'classification':

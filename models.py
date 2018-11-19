@@ -81,7 +81,7 @@ class VAE(nn.Module):
         if c is None:
             c = torch.LongTensor(np.random.randint(0, 9, n)).view(-1).to(self.device)
         sample = self.decode(z, c)
-        return sample
+        return sample, c
 
     def init_weights(self):
         self.apply(self.init_weights_dist)
