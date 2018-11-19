@@ -34,7 +34,7 @@ class net(nn.Module):
 # Define classifier networks. Theta start will be trained on everything, theta all only on the restricted set
 class _classifier(net):
     def __init__(self):
-        super(_classifier, self).__init__()
+        super(net, self).__init__()
         self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
         self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
         self.conv2_drop = nn.Dropout2d()
@@ -63,7 +63,7 @@ class _classifier(net):
 
 class VAE(net):
     def __init__(self, device, lat_dim=20):
-        super(VAE, self).__init__()
+        super(net, self).__init__()
         self.lat_dim = lat_dim
         self.device = device
         num_classes = 10
