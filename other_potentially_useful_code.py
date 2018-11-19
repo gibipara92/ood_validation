@@ -1,6 +1,7 @@
 
 criterion = F.nll_loss
 
+
 # setup optimizer
 optimizer = optim.RMSprop(theta_star.parameters(), lr=0.1)  # , momentum=0.5) #, lr=opt.lr, betas=(opt.beta1, 0.999))
 schedulerC = torch.optim.lr_scheduler.StepLR(optimizerC, step_size=150000, gamma=0.2)
@@ -40,7 +41,7 @@ def plotter(iteration):
 
 def error_on_valid():
     with torch.no_grad():
-        theta_all  _output = theta_all  (fixed_x_valid_non_iid)
+        theta_all _output = theta_all  (fixed_x_valid_non_iid)
         err_theta_all   = criterion(theta_all  _output, fixed_y_valid_non_iid)
         writer.add_scalar('Non_iid/valid', err_theta_all.item(), iterations)
     return err_theta_all.item()
