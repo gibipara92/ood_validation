@@ -22,7 +22,7 @@ import matplotlib
 matplotlib.use('agg')
 import matplotlib.pyplot as plt
 from tensorboardX import SummaryWriter
-from models import VAE, idx2onehot
+from models import VAE, idx2onehot, net, _classifier
 
 # Args pars
 if 1:
@@ -104,56 +104,12 @@ nc = 3
 if opt.dataset in ['mnist']:
     nc = 1
 
-# custom weights initialization
-def init_weights(m):
-    if type(m) == nn.Linear:
-        torch.nn.init.xavier_uniform(m.weight)
-        m.bias.data.fill_(0.01)
+# # custom weights initialization
+# def init_weights(m):
+#     if type(m) == nn.Linear:
+#         torch.nn.init.xavier_uniform(m.weight)
+#         m.bias.data.fill_(0.01)
 
-
-# TODO: make this class a parent of both _classifier and VAE, so we can have common attributes for both.
-# TODO: Probably need to move this and the classifier to the models.py file
-class net(nn.Module):
-    def __init__(self):
-        # Number of iterations we trained for
-        self.curr_iteration = 0
-        # List with the validation errors on the two splits
-        self.valid_err_split_1 = []
-        self.valid_err_split_2 = []
-        # List with the iterations where we computed validation errors on the two splits
-        self.valid_err_iterations = []
-
-
-# Define classifier networks. Theta start will be trained on everything, theta all only on the restricted set
-class _classifier(nn.Module):
-    def __init__(self):
-        super(_classifier, self).__init__()
-        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
-        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
-        self.conv2_drop = nn.Dropout2d()
-        self.fc1 = nn.Linear(320, 50)
-        self.fc2 = nn.Linear(50, 10)
-
-    def forward(self, x):
-        x = F.relu(F.max_pool2d(self.conv1(x), 2))
-        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
-        x = x.view(-1, 320)
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x, training=self.training)
-        x = self.fc2(x)
-        return F.log_softmax(x, dim=1)
-
-    def init_weights(self):
-        self.apply(self.init_weights)
-
-    def init_weights_dist(self, m):
-        if type(m) == nn.Linear:
-            torch.nn.init.xavier_uniform(m.weight)
-            m.bias.data.fill_(0.01)
-        if type(m) == nn.Conv2d or type(m) == nn.ConvTranspose2d:
-            torch.nn.init.xavier_uniform(m.weight)
-
-# TODO define a new class NET that has the extra attributes we need (e.g. validation scores, etc.)
 
 class Ground_truth():
     """ For now it only loads the c_vae_path as ground truth"""
@@ -195,40 +151,20 @@ data_generator = Ground_truth()
 # Creat fixed sets of test data for the two splits
 split_1_test_img, split_1_test_c = data_generator.sample_distribution(n=512, distribution=split_1)
 split_2_test_img, split_2_test_c = data_generator.sample_distribution(n=512, distribution=split_2)
-test_all_img, test_all_c         = torch.cat(split_1_test_img, split_2_test_img), torch.cat(split_1_test_c, split_2_test_c)
-
-# fixed_x_train_non_iid, fixed_y_train_non_iid = torch.Tensor(
-#     ground_truth.sample(x_range=non_iid_training_range, n=1024, sample_grid=True)).to(device)
-# fixed_x_valid_non_iid, fixed_y_valid_non_iid = torch.Tensor(
-#     ground_truth.sample(x_range=validation_range, n=1024, sample_grid=True)).to(device)
-# fixed_x_iid, fixed_y_iid = torch.Tensor(ground_truth.sample(x_range=iid_available_range, n=1024, sample_grid=True)).to(
-#     device)
-# fixed_x_test_non_iid, fixed_y_test_non_iid = torch.Tensor(
-#     ground_truth.sample(x_range=test_range, n=1024, sample_grid=True)).to(device)
-#
-# fixed_x_train_non_iid_numpy, fixed_y_train_non_iid_numpy = fixed_x_train_non_iid.cpu().numpy(), fixed_y_train_non_iid.cpu().numpy()
-# fixed_x_valid_non_iid_numpy, fixed_y_valid_non_iid_numpy = fixed_x_valid_non_iid.cpu().numpy(), fixed_y_valid_non_iid.cpu().numpy()
-# fixed_x_iid_numpy, fixed_y_iid_numpy = fixed_x_iid.cpu().numpy(), fixed_y_iid.cpu().numpy()
-# fixed_x_test_non_iid_numpy, fixed_y_test_non_iid_numpy = fixed_x_test_non_iid.cpu().numpy(), fixed_y_test_non_iid.cpu().numpy()
+# Fixed distribution from the restricted range
+test_both_splits_img, test_both_splits_c = torch.cat(split_1_test_img[:256], split_2_test_img[:256]),\
+                                           torch.cat(split_1_test_c[:256], split_2_test_c[:256])
+# Fixed distribution from the full gaussian
+test_full_img, test_full_c = data_generator.sample_distribution(n=512, distribution='all')
 
 
 # Comments:
-# Do it for both classification and standard retraining of the CVAE! Must be general
 
 # The split on the Gaussian should be done by using a line. i.e., randomely initialize dim(z) vectors of size z each,
 # and use each one of them as a point to compute a plane split. Use signum of dot product to check where it belongs,
 # then flip the sign if wrong side.
 
 # Do we keep the Gaussian term when retraining? Probably not
-
-# List of needed for later:
-
-# Data from split 1 for testing
-# Data from split 2 for testing
-# Data from outside of restricted area
-# A function that given params trains a network with that configuration, will use this A LOT
-# How to properly compare split 1 and 2 so we have full visibility?
-
 
 ################################
 # Helper functions
@@ -271,14 +207,18 @@ def train_classifier(net, distribution, iterations, optimizer=None):
                        100. * net.curr_iteration / net.curr_iteration, loss.item()))
 
 
+def validation_err_on_data(net, data, targets):
+    return F.mse_loss(net(data), targets)
+
+
 def validate_all(net, append_results=True):
     """Returns validation scores for net on the given distribution
     Returns validation scores first on split_1, then split_2
     """
     net.eval()
 
-    valid_err_split_1 = net()
-    valid_err_split_2 = 0 # TODO
+    valid_err_split_1 = validation_err_on_data(net, split_1_test_img, split_1_test_c)
+    valid_err_split_2 = validation_err_on_data(net, split_2_test_img, split_2_test_c)
 
     if append_results:
         net.valid_err_split_1.append(valid_err_split_1)
@@ -286,7 +226,6 @@ def validate_all(net, append_results=True):
         net.valid_err_iterations.append(net.curr_iteration)
 
     return valid_err_split_1, valid_err_split_2
-
 
 
 def train_twins(net, iterations):
@@ -386,7 +325,6 @@ compare_networks(theta_star, theta_all, data=None)  # TODO fix the data to restr
 
 
 epsilons_to_test = [i * 0.1 for i in range(5)]
-
 
 for eps in epsilons_to_test:
     theta_star_eps = add_noise_weights(theta_star.clone())

@@ -19,8 +19,50 @@ def idx2onehot(labels, num_classes):
     y = torch.eye(num_classes)
     return y[labels]
 
+# TODO: make this class a parent of both _classifier and VAE, so we can have common attributes for both.
+# TODO: Probably need to move this and the classifier to the models.py file
+class net(nn.Module):
+    def __init__(self):
+        # Number of iterations we trained for
+        self.curr_iteration = 0
+        # List with the validation errors on the two splits
+        self.valid_err_split_1 = []
+        self.valid_err_split_2 = []
+        # List with the iterations where we computed validation errors on the two splits
+        self.valid_err_iterations = []
 
-class VAE(nn.Module):
+
+# Define classifier networks. Theta start will be trained on everything, theta all only on the restricted set
+class _classifier(net):
+    def __init__(self):
+        super(_classifier, self).__init__()
+        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
+        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
+        self.conv2_drop = nn.Dropout2d()
+        self.fc1 = nn.Linear(320, 50)
+        self.fc2 = nn.Linear(50, 10)
+
+    def forward(self, x):
+        x = F.relu(F.max_pool2d(self.conv1(x), 2))
+        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
+        x = x.view(-1, 320)
+        x = F.relu(self.fc1(x))
+        x = F.dropout(x, training=self.training)
+        x = self.fc2(x)
+        return F.log_softmax(x, dim=1)
+
+    def init_weights(self):
+        self.apply(self.init_weights)
+
+    def init_weights_dist(self, m):
+        if type(m) == nn.Linear:
+            torch.nn.init.xavier_uniform(m.weight)
+            m.bias.data.fill_(0.01)
+        if type(m) == nn.Conv2d or type(m) == nn.ConvTranspose2d:
+            torch.nn.init.xavier_uniform(m.weight)
+
+
+class VAE(net):
     def __init__(self, device, lat_dim=20):
         super(VAE, self).__init__()
         self.lat_dim = lat_dim
