@@ -108,7 +108,6 @@ def train(epoch):
                 epoch, batch_idx * len(data), len(train_loader.dataset),
                 100. * batch_idx / len(train_loader), model.iterations,
                 loss.data[0] / len(data)))
-
     print('====> Epoch: {} Average loss: {:.4f}'.format(
           epoch, train_loss / len(train_loader.dataset)))
 
@@ -127,7 +126,6 @@ def test(epoch):
                 comparison = torch.cat([data[:n], recon_batch.view(args.batch_size, 1, 32, 32)[:n]])
                 save_image(comparison.data.cpu(),
                              args.path_img + 'reconstruction_' + str(epoch) + '.png', nrow=n)
-
     test_loss /= len(test_loader.dataset)
     print('====> Test set loss: {:.4f}'.format(test_loss))
 
@@ -139,9 +137,11 @@ for epoch in range(1, args.epochs + 1):
     # sample = sample.to(device)
     targets = torch.LongTensor([[i] * 8 for i in range(10)]).view(-1).to(device)
     # sample = model.decode(sample, targets).cpu()
-    sample, _ = model.sample(n=80, c=targets).cpu()
+    sample, _ = model.sample(n=80, c=targets)
+    if args.cuda:
+        sample = sample.cpu()
     save_image(sample.data.view(80, 1, 32, 32), args.path_img + 'sample_' + str(epoch) + '.png', nrow=8)
 
-torch.save(model, '%s/CVAE.t7' % (args.path_img))
+torch.save(model.state_dict(), '%s/CVAE.pth' % (args.path_img))
 
 
