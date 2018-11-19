@@ -240,12 +240,12 @@ def train_twins(net, iterations):
     disagreement_error = []
 
     if opt.task == 'classification':
-        disagreement_error.append([net_twin_1.curr_iteration, compare_networks(net_twin_1, net_twin_2, data=restrict_gaussian_range)])
+        disagreement_error.append([net_twin_1.curr_iteration, compare_networks(net_twin_1, net_twin_2, data=test_both_splits_img)])
         for i in range(40):
             # Train theta on the two sets of the data
             train_classifier(net_twin_1, distribution=split_1, optimizer=optim_1, iterations=iterations)
             train_classifier(net_twin_2, distribution=split_2, optimizer=optim_2, iterations=iterations)
-            disagreement_error.append(compare_networks(net_twin_1, net_twin_2, data=restrict_gaussian_range))
+            disagreement_error.append(compare_networks(net_twin_1, net_twin_2, data=test_both_splits_img))
     else:
         pass
     return disagreement_error
@@ -311,7 +311,7 @@ else:
 torch.save(theta_all, '%s/theta_all.t7' % (opt.outf))
 
 # Ensure that validation iid error on restricted is approx the same
-compare_networks(theta_star, theta_all, data=None)  # TODO fix the data to restricted test
+compare_networks(theta_star, theta_all, data=test_both_splits_img)  # TODO fix the data to restricted test
 
 ## Main experiment: twin study
 # for growing epsilon noise:
