@@ -155,6 +155,34 @@ class _classifier(nn.Module):
 
 # TODO define a new class NET that has the extra attributes we need (e.g. validation scores, etc.)
 
+class Ground_truth():
+    """ For now it only loads the c_vae_path as ground truth"""
+    def __init__(self, net=torch.load(opt.c_vae_path)):
+        # Number of iterations we trained for
+        self.net = torch.load(net)
+        self.net.eval()
+
+    def sample_distribution(self, n, distribution, c=None):
+        # Improve this sampling cut to a nicer line
+        if distribution == 'all':
+            # This samples from the whole gaussian
+            z = Variable(torch.randn(n, self.net.lat_dim)).to(self.device)
+        else:
+            # This restricts the value to the hypercube of side length 1.0
+            z = Variable(0.5 - torch.rand(n, self.net.lat_dim)).to(self.device)
+
+        if distribution is [0, 1]:
+            z[:,0] = torch.abs(z[:,0])
+        elif distribution is [-1, 0]:
+            z[:,0] = -torch.abs(z[:,0])
+        else:
+            # No need to do anything in this case, will be in the hypercube
+            pass
+
+        return self.sample(n, z, c)
+
+    def sample(self, n, z=None, c=None):
+        return self.net.sample(n, z, c)
 
 
 # fixed_x_train_non_iid, fixed_y_train_non_iid = torch.Tensor(
@@ -194,19 +222,50 @@ class _classifier(nn.Module):
 # Helper functions
 ################################
 
-def train_classifier(net, distribution, iterations):
-    """Trains net as a classifier on the distribution specified by distribution"""
-    for it in range(iterations):
 
-        # while training keep track of validation performances on all splits
-        valid_err_split_1, valid_err_split_2 = validate_all(net)
+def _optimizer(net):
+    """Returns an optimizer for the given network"""
+    return optim.RMSprop(net.parameters(), lr=0.01)
 
+
+def train_generator(net, distribution, iterations, optimizer=None): # TODO (steal from train cvae file and train_classifier)
+    """Trains net as a generator on the distribution specified by distribution"""
     pass
+
+
+def train_classifier(net, distribution, iterations, optimizer=None):
+    """Trains net as a classifier on the distribution specified by distribution.
+    If optimizer is None it will initialize a new one."""
+
+    if optimizer is None:
+        optimizer = _optimizer(net)
+
+    net.train()
+    it = 0
+    while it < iterations:
+        # TODO incorporate distribution into next line
+        data, target = data_generator.sample_distribution(n=256, distribution=distribution)
+        it += 1
+        net.curr_iteration += 1
+        data, target = data.to(device), target.to(device)
+        optimizer.zero_grad()
+        output = net(data)
+        loss = F.nll_loss(output, target)
+        loss.backward()
+        optimizer.step()
+        if net.curr_iteration % opt.log_interval == 0:
+            valid_err_split_1, valid_err_split_2 = validate_all(net, append_results=True)
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                net.iterations, net.curr_iteration * len(data), net.curr_iteration,
+                       100. * net.curr_iteration / net.curr_iteration, loss.item()))
+
+
 
 def validate_all(net, append_results=True):
     """Returns validation scores for net on the given distribution
     Returns validation scores first on split_1, then split_2
     """
+    net.eval()
     valid_err_split_1 = 0 # TODO, use some standard fixed data from the two splits to compute this
     valid_err_split_2 = 0 # TODO
     if append_results:
@@ -216,25 +275,30 @@ def validate_all(net, append_results=True):
     return valid_err_split_1, valid_err_split_2
 
 
-def train_generator(net, distribution, iterations):
-    """Trains net as a generator on the distribution specified by distribution"""
-    pass
-
 
 def train_twins(net, iterations):
     """Clones net, trains it on two splits separately as twins, compares the result"""
     net_twin_1 = net.clone()
     net_twin_2 = net.clone()
 
+    optim_1 = _optimizer(net_twin_1)
+    optim_2 = _optimizer(net_twin_2)
+
+    # Will store here the disagreemnet between the two twins
+    disagreement_error = []
+
     # TODO we should be comparing the two nets all the time while training, not only at the end of training
     # TODO so that we can plot how the two twins get 'back together' for the nice case as we train
     if opt.task == 'classification':
-        # Train theta on the two sets of the data
-        train_classifier(net_twin_1, distribution=split_1, iterations=iterations)
-        train_classifier(net_twin_2, distribution=split_2, iterations=iterations)
-        compare_networks(net_twin_1, net_twin_2, data=restrict_gaussian_range)
+        disagreement_error.append([net_twin_1.curr_iteration, compare_networks(net_twin_1, net_twin_2, data=restrict_gaussian_range)])
+        for i in range(40):
+            # Train theta on the two sets of the data
+            train_classifier(net_twin_1, distribution=split_1, optimizer=optim_1, iterations=iterations)
+            train_classifier(net_twin_2, distribution=split_2, optimizer=optim_2, iterations=iterations)
+            disagreement_error.append(compare_networks(net_twin_1, net_twin_2, data=restrict_gaussian_range))
     else:
         pass
+    return disagreement_error
 
 
 def compare_networks(net1, net2, data):
@@ -243,17 +307,19 @@ def compare_networks(net1, net2, data):
     # TODO: data will be the range of the distrivution to use?
     net1.eval()
     net2.eval()
+
     out1 = net1(data)
     out2 = net2(data)
-    # TODO: error = F.mse(out1, out2)
+
+    error = 0  # TODO: error = F.mse(out1, out2)
     # Print error
+    return error
 
 
 def add_noise_weights(net, eps_sigma):
     """ Add gaussian noise to the weights of net as scaled by eps. Modify in place, no return"""
     for m in net.parameters():
         m.data += torch.FloatTensor(m.size()).normal_(0., eps_sigma).to(device)
-
 
 
 
@@ -267,9 +333,8 @@ def add_noise_weights(net, eps_sigma):
 #########################
 
 # Train the cvae if not already trained, otherwise load it
-data_generator = torch.load(torch.load(opt.c_vae_path))
+data_generator = Ground_truth()
 # data_generator.load_state_dict(torch.load(opt.c_vae_path))
-data_generator.eval()
 
 # Init and train theta_star on all of the data from the cvae
 if opt.task == 'classification':
@@ -321,8 +386,9 @@ for eps in epsilons_to_test:
     theta_star_eps = add_noise_weights(theta_star.clone())
     theta_all_eps  = add_noise_weights(theta_all.clone())
 
-    train_twins(theta_star_eps, iterations=100)
+    disagreement_error_star = train_twins(theta_star_eps, iterations=100)
+    disagreement_error_all  = train_twins(theta_all_eps, iterations=100)
 
-    train_twins(theta_all_eps, iterations=100)
+    embed()
 
 writer.close()

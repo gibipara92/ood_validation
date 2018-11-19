@@ -140,7 +140,7 @@ for epoch in range(1, args.epochs + 1):
     targets = torch.LongTensor([[i] * 8 for i in range(10)]).view(-1).to(device)
     # sample = model.decode(sample, targets).cpu()
     sample = model.sample(n=80, c=targets).cpu()
-    save_image(sample.data.view(80, 1, 32, 32), args.path_img + 'sample_' + str(epoch) + '.png', nrow=10)
+    save_image(sample.data.view(80, 1, 32, 32), args.path_img + 'sample_' + str(epoch) + '.png', nrow=8)
 
 torch.save(model, '%s/CVAE.t7' % (args.path_img))
 
