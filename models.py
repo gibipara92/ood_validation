@@ -19,8 +19,7 @@ def idx2onehot(labels, num_classes):
     y = torch.eye(num_classes)
     return y[labels]
 
-# TODO: make this class a parent of both _classifier and VAE, so we can have common attributes for both.
-# TODO: Probably need to move this and the classifier to the models.py file
+
 class net(nn.Module):
     def __init__(self):
         # Number of iterations we trained for

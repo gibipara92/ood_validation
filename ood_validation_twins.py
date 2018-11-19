@@ -113,7 +113,7 @@ if opt.dataset in ['mnist']:
 
 class Ground_truth():
     """ For now it only loads the c_vae_path as ground truth"""
-    def __init__(self, net=torch.load(opt.c_vae_path)):
+    def __init__(self, net=torch.load(opt.c_vae_path, map_location=None if device is 'cuda' else 'cpu')):
         # Number of iterations we trained for
         self.net = torch.load(net)
         self.net.eval()
