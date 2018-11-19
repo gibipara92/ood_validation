@@ -112,7 +112,7 @@ def init_weights(m):
 
 
 # TODO: make this class a parent of both _classifier and VAE, so we can have common attributes for both.
-# TODO: Probably need to move this and the classifier to the CVAE file and rename it networks
+# TODO: Probably need to move this and the classifier to the models.py file
 class net(nn.Module):
     def __init__(self):
         # Number of iterations we trained for
@@ -207,22 +207,40 @@ def validate_all(net, append_results=True):
     """Returns validation scores for net on the given distribution
     Returns validation scores first on split_1, then split_2
     """
-    valid_err_split_1 = 0 # TODO
+    valid_err_split_1 = 0 # TODO, use some standard fixed data from the two splits to compute this
     valid_err_split_2 = 0 # TODO
     if append_results:
         net.valid_err_split_1.append(valid_err_split_1)
         net.valid_err_split_2.append(valid_err_split_2)
         net.valid_err_iterations.append(net.curr_iteration)
-    # return valid_err_split_1, valid_err_split_2
+    return valid_err_split_1, valid_err_split_2
+
 
 def train_generator(net, distribution, iterations):
     """Trains net as a generator on the distribution specified by distribution"""
     pass
 
 
+def train_twins(net, iterations):
+    """Clones net, trains it on two splits separately as twins, compares the result"""
+    net_twin_1 = net.clone()
+    net_twin_2 = net.clone()
+
+    # TODO we should be comparing the two nets all the time while training, not only at the end of training
+    # TODO so that we can plot how the two twins get 'back together' for the nice case as we train
+    if opt.task == 'classification':
+        # Train theta on the two sets of the data
+        train_classifier(net_twin_1, distribution=split_1, iterations=iterations)
+        train_classifier(net_twin_2, distribution=split_2, iterations=iterations)
+        compare_networks(net_twin_1, net_twin_2, data=restrict_gaussian_range)
+    else:
+        pass
+
+
 def compare_networks(net1, net2, data):
     """ Compare performance of net1 and net2 on a given set of data, by comparing the average error between the
-    predictions of the two."""
+    predictions of the two. Returns the average cross error"""
+    # TODO: data will be the range of the distrivution to use?
     net1.eval()
     net2.eval()
     out1 = net1(data)
@@ -231,9 +249,11 @@ def compare_networks(net1, net2, data):
     # Print error
 
 
-def add_noise_weights(net, eps):
+def add_noise_weights(net, eps_sigma):
     """ Add gaussian noise to the weights of net as scaled by eps. Modify in place, no return"""
-    pass
+    for m in net.parameters():
+        m.data += torch.FloatTensor(m.size()).normal_(0., eps_sigma).to(device)
+
 
 
 
@@ -293,6 +313,7 @@ compare_networks(theta_star, theta_all, data=None)  # TODO fix the data to restr
 #           keep track of *all* validation measures
 #           keep track of *cross-error on the other splits*
 
+
 epsilons_to_test = [i * 0.1 for i in range(5)]
 
 
@@ -300,14 +321,8 @@ for eps in epsilons_to_test:
     theta_star_eps = add_noise_weights(theta_star.clone())
     theta_all_eps  = add_noise_weights(theta_all.clone())
 
-    for split in [split_1, split_2]:
-        th_star_twin = theta_star_eps.clone()
-        th_all_twin  = theta_all_eps.clone()
-        if opt.task == 'classification':
-            # Train theta on the set of the data
-            train_classifier(th_star_twin, distribution=split, iterations=100)
-            train_classifier(th_all_twin, distribution=split, iterations=100)
-        else:
-            pass
+    train_twins(theta_star_eps, iterations=100)
+
+    train_twins(theta_all_eps, iterations=100)
 
 writer.close()
