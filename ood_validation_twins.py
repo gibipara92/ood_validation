@@ -186,7 +186,7 @@ def _optimizer(net, lr=0.0001):
     return optim.Adam(net.parameters(), lr=lr)
 
 
-def train_generator(net, distribution, iterations, optimizer=None): # TODO (steal from train cvae file and train_classifier)
+def train_generator(net, distribution, iterations, optimizer=None):
     """Trains net as a generator on the distribution specified by distribution"""
     if optimizer is None:
         optimizer = _optimizer(net)
