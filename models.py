@@ -39,19 +39,19 @@ class Net(nn.Module):
 class _classifier(Net):
     def __init__(self):
         super(_classifier, self).__init__()
-        self.conv1 = nn.Conv2d(1, 10, kernel_size=5)
-        self.conv2 = nn.Conv2d(10, 20, kernel_size=5)
-        self.conv2_drop = nn.Dropout2d()
-        self.fc1 = nn.Linear(500, 50)
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=5)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=5)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3)
+        self.fc1 = nn.Linear(64, 50)
         self.fc2 = nn.Linear(50, 10)
 
     def forward(self, x):
         x = x.view(-1, 1, 32, 32)
-        x = F.relu(F.max_pool2d(self.conv1(x), 2))
-        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
-        x = x.view(-1, 20 * 5 * 5)
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x, training=self.training)
+        x = F.elu(F.max_pool2d(self.conv1(x), 2))
+        x = F.elu(F.max_pool2d(self.conv2(x), 2))
+        x = F.elu(F.max_pool2d(self.conv3(x), 2))
+        x = x.view(-1, 64)
+        x = F.elu(self.fc1(x))
         x = self.fc2(x)
         return F.log_softmax(x, dim=1)
 
@@ -69,7 +69,7 @@ class _classifier(Net):
         super(_classifier, self).reset_net_attributes()
 
 class VAE(Net):
-    def __init__(self, device, lat_dim=20):
+    def __init__(self, device=torch.device("cuda:0" if torch.cuda.is_available() else "cpu"), lat_dim=20):
         super(VAE, self).__init__()
         self.lat_dim = lat_dim
         self.device = device
@@ -129,7 +129,7 @@ class VAE(Net):
         if c is None:
             c = torch.LongTensor(np.random.randint(0, 9, n)).view(-1).to(self.device)
         sample = self.decode(z, c)
-        return sample, c
+        return sample, c, z
 
     def init_weights(self):
         self.apply(self.init_weights_dist)
@@ -140,3 +140,6 @@ class VAE(Net):
             m.bias.data.fill_(0.01)
         if type(m) == nn.Conv2d or type(m) == nn.ConvTranspose2d:
             torch.nn.init.xavier_uniform_(m.weight)
+
+    def reset_net_attributes(self):
+        super(VAE, self).reset_net_attributes()

@@ -137,11 +137,11 @@ for epoch in range(1, args.epochs + 1):
     # sample = sample.to(device)
     targets = torch.LongTensor([[i] * 8 for i in range(10)]).view(-1).to(device)
     # sample = model.decode(sample, targets).cpu()
-    sample, _ = model.sample(n=80, c=targets)
+    sample, _, _ = model.sample(n=80, c=targets)
     if args.cuda:
         sample = sample.cpu()
     save_image(sample.data.view(80, 1, 32, 32), args.path_img + 'sample_' + str(epoch) + '.png', nrow=8)
 
-torch.save(model.state_dict(), '%s/CVAE.pth' % (args.path_img))
+    torch.save(model.state_dict(), '%s/CVAE.pth' % (args.path_img))
 
 
