@@ -14,6 +14,7 @@ import torchvision.datasets as dset
 import torchvision.transforms as transforms
 import torchvision.utils as vutils
 from torch.autograd import Variable
+from torchvision.utils import save_image
 from IPython import embed
 import scipy.misc
 import numpy as np
@@ -32,8 +33,10 @@ if 1:
     parser.add_argument('--dataroot', help='path to dataset')
     parser.add_argument('--workers', type=int, help='number of data loading workers', default=2)
     parser.add_argument('--batch_size', type=int, default=1024, help='input batch size')
+    parser.add_argument('--dims_to_half', type=int, default=10, help='dimensions to half in the gaussian')
     parser.add_argument('--niter', type=int, default=5000, help='number of epochs to train for')
     parser.add_argument('--lr', type=float, default=0.005, help='learning rate, default=0.0002')
+    parser.add_argument('--threshold', type=float, default=0.000001, help='learning rate, default=0.0002')
     parser.add_argument('--beta', type=float, default=0.5, help='beta1 for adam. default=0.5')
     parser.add_argument('--cuda', action='store_true', default=True, help='enables cuda')
     parser.add_argument('--debug', action='store_true', default=False, help='debug mode')
@@ -41,10 +44,10 @@ if 1:
     parser.add_argument('--no_train_all', action='store_true', default=False, help='Use pretrained all network')
     parser.add_argument('--ngpu', type=int, default=1, help='number of GPUs to use')
     parser.add_argument('--outf',
-                        default='/is/cluster/gparascandolo/ood_validation/generator_dim10/',
+                        default='/is/cluster/gparascandolo/ood_validation_diff_nets/celeba/',
                         help='folder to output images and model checkpoints')
     parser.add_argument('--c_vae_path',
-                        default='/is/cluster/gparascandolo/generative-models/GAN/R_out/VAEs/CVAE/CVAE.pth',
+                        default='/is/cluster/gparascandolo/ood_validation_diff_nets/VAEs/',
                         help='folder to output images and model checkpoints')
     parser.add_argument('--manualSeed', type=int, help='manual seed')
 
@@ -106,39 +109,45 @@ if opt.dataset in ['mnist']:
 #         torch.nn.init.xavier_uniform(m.weight)
 #         m.bias.data.fill_(0.01)
 
+def sample_z_distribution(distribution, n, z_dim, device):
+    if distribution == 'all':
+        # This samples from the whole gaussian
+        z = Variable(torch.randn(n, z_dim)).to(device)
+    else:
+        # This restricts the value to the hypercube of side length 1.0
+        # TODO implement trucnated normal instead of 0.01
+        z = Variable(torch.randn(n, z_dim)).to(device)
+        dims_to_half = opt.dims_to_half
+        if distribution is split_1:
+            z = Variable(0.05 * torch.randn(n, z_dim)).to(device).clamp(-0.1, 0.1) # TODO .clamp
+            # z[:, :dims_to_half] = torch.abs(z[:, :dims_to_half])
+        elif distribution is split_2:
+            z = Variable(0.2 * torch.randn(n, z_dim)).to(device).clamp(-0.3, 0.3)
+            # z[:, :dims_to_half] = -torch.abs(z[:, :dims_to_half])
+        elif distribution is restrict_gaussian_range:
+            # z[:, :dims_to_half] = torch.abs(z[:, :dims_to_half])
+            z[:n//2] = Variable(0.05 * torch.randn(n, z_dim)).to(device)[:n//2].clamp(-0.1, 0.1)
+            z[n//2:] = Variable(0.2 * torch.randn(n, z_dim)).to(device)[n//2:].clamp(-0.3, 0.3)
+            # z[n // 2:, :dims_to_half] = -z[n // 2:, :dims_to_half]
+        else:
+            print('Error in sample distribution, unknown distribution:', distribution)
+            sys.exit(1)
+    return z
 
 class Ground_truth():
     """ For now it only loads the c_vae_path as ground truth"""
 
-    def __init__(self, net=torch.load(opt.c_vae_path, map_location=None if device is 'cuda' else 'cpu')):
+    def __init__(self, path, color_channels, map_location=None if device is 'cuda' else 'cpu'):
         # Number of iterations we trained for
-        self.net = VAE(device)
-        self.net.load_state_dict(torch.load(opt.c_vae_path))
+        self.net = VAE(device, color_channels=color_channels)
+        self.net.load_state_dict(torch.load(path))
         self.net.to(device)
         self.net.eval()
 
     def sample_distribution(self, n, distribution, c=None):
         self.net.eval()
         # Improve this sampling cut to a nicer line
-        if distribution == 'all':
-            # This samples from the whole gaussian
-            z = Variable(torch.randn(n, self.net.lat_dim)).to(self.net.device)
-        else:
-            # This restricts the value to the hypercube of side length 1.0
-            # TODO implement trucnated normal instead of 0.01
-            z = Variable(torch.randn(n, self.net.lat_dim)).to(self.net.device)
-            dims_to_half = 14
-            if distribution is split_1:
-                z[:, :dims_to_half] = torch.abs(z[:, :dims_to_half])
-            elif distribution is split_2:
-                z[:, :dims_to_half] = -torch.abs(z[:, :dims_to_half])
-            elif distribution is restrict_gaussian_range:
-                z[:, :dims_to_half] = torch.abs(z[:, :dims_to_half])
-                z[n // 2:, :dims_to_half] = -z[n // 2:, :dims_to_half]
-            else:
-                print('Error in sample distribution, unknown distribution:', distribution)
-                sys.exit(1)
-
+        z = sample_z_distribution(distribution, n, self.net.lat_dim, self.net.device)
         return self.sample(n, z, c)
 
     def sample(self, n, z=None, c=None):
@@ -147,7 +156,7 @@ class Ground_truth():
 
 
 # Train the cvae if not already trained, otherwise load it
-data_generator = Ground_truth()
+data_generator = Ground_truth(path=opt.c_vae_path + 'CVAE_' + opt.dataset + '.pth', color_channels=nc)
 # data_generator.load_state_dict(torch.load(opt.c_vae_path))
 
 # Creat fixed sets of test data for the two splits
@@ -174,6 +183,16 @@ test_full_img, test_full_c, test_full_z = data_generator.sample_distribution(n=5
 # Helper functions
 ################################
 
+def pad_all_sublists(super_list):
+    max_len = 0
+    for l in super_list:
+        if len(l) > max_len:
+            max_len = len(l)
+    for l in super_list:
+        l += [l[-1]] * (max_len - len(l))
+    return super_list
+
+
 def clone_network(net):
     if opt.task == 'classification':
         return copy.deepcopy(net)
@@ -188,6 +207,7 @@ def _optimizer(net, lr=0.01):
     """Returns an optimizer for the given network"""
     return optim.Adam(net.parameters(), lr=lr)
 
+
 def _scheduler(optimizer):
     """Returns an optimizer for the given network"""
     return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', factor=0.2, verbose=True, cooldown=100, min_lr=1e-6, patience=100)
@@ -201,7 +221,7 @@ def train_generator(net, distribution, iterations, optimizer=None, scheduler=Non
 
     it = 0
 
-    valid_err_split_1, valid_err_split_2 = validate_all(net, append_results=True)
+    valid_err_split_1, valid_err_split_2, valid_err_full = validate_all(net, append_results=True)
     while it < iterations:
         net.train()
         data, c, z = data_generator.sample_distribution(n=opt.batch_size, distribution=distribution)  #
@@ -210,11 +230,12 @@ def train_generator(net, distribution, iterations, optimizer=None, scheduler=Non
         data, c, z = data.to(device), c.to(device), z.to(device)
         optimizer.zero_grad()
         output = net.decode(z, c)
-        loss = F.binary_cross_entropy(output.view(-1, 32 * 32), data)
+        # loss = F.binary_cross_entropy(output.view(-1, 32 * 32), data)
+        loss = F.mse_loss(output.view(-1, 32 * 32 * nc), data)
         loss.backward()
         optimizer.step()
         if net.curr_iteration % 100 == 0:
-            valid_err_split_1, valid_err_split_2 = validate_all(net, append_results=True)
+            valid_err_split_1, valid_err_split_2, valid_err_full = validate_all(net, append_results=True)
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 net.curr_iteration, net.curr_iteration * len(data), net.curr_iteration,
                                     100. * net.curr_iteration / net.curr_iteration, loss.item()))
@@ -224,6 +245,7 @@ def train_generator(net, distribution, iterations, optimizer=None, scheduler=Non
             return True
 
     return False
+
 
 def train_classifier(net, distribution, iterations, optimizer=None, scheduler=None):
     """Trains net as a classifier on the distribution specified by distribution.
@@ -246,7 +268,7 @@ def train_classifier(net, distribution, iterations, optimizer=None, scheduler=No
         loss.backward()
         optimizer.step()
         if net.curr_iteration % 100 == 0:
-            valid_err_split_1, valid_err_split_2 = validate_all(net, append_results=True)
+            valid_err_split_1, valid_err_split_2, valid_err_full = validate_all(net, append_results=True)
             print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
                 net.curr_iteration, net.curr_iteration * len(data), net.curr_iteration,
                                     100. * net.curr_iteration / net.curr_iteration, loss.item()))
@@ -258,7 +280,7 @@ def validation_err_on_data(net, data, targets):
 
 
 def validation_err_on_data_generator(net, data, c, z):
-    return F.mse_loss(net.decode(z, c).view(-1, 32 * 32), data, reduction='elementwise_mean').item()
+    return F.mse_loss(net.decode(z, c).view(-1, 32 * 32 * nc), data, reduction='elementwise_mean').item()
 
 
 def validate_all(net, append_results=True, task=opt.task):
@@ -273,16 +295,43 @@ def validate_all(net, append_results=True, task=opt.task):
         else:
             valid_err_split_1 = validation_err_on_data_generator(net, split_1_test_img, split_1_test_c, split_1_test_z)
             valid_err_split_2 = validation_err_on_data_generator(net, split_2_test_img, split_2_test_c, split_2_test_z)
+            valid_err_split_full = validation_err_on_data_generator(net, test_full_img, test_full_c, test_full_z)
 
         if append_results:
             net.valid_err_split_1.append(valid_err_split_1)
             net.valid_err_split_2.append(valid_err_split_2)
+            net.valid_err_split_full.append(valid_err_split_full)
             net.valid_err_iterations.append(net.curr_iteration)
 
-        return valid_err_split_1, valid_err_split_2
+        return valid_err_split_1, valid_err_split_2, valid_err_split_full
 
 
-def train_twins(net, iterations, tensorboard_id=None):
+def save_samples(net, distribution, id=''):
+    targets = torch.LongTensor([[i] * 8 for i in range(10)]).view(-1).to(device)
+    # z = sample_z_distribution(distribution=distribution, n=80, z_dim=net.lat_dim, device=device)
+    if distribution == 'all':
+        z = test_full_z[:80]
+    elif distribution == restrict_gaussian_range:
+        z = test_both_splits_z[:80]
+    elif distribution == split_1:
+        z = split_1_test_z[:80]
+    elif distribution == split_2:
+        z = split_2_test_z[:80]
+    else:
+        raise ValueError('save_samples got wrong value for distribution')
+    with torch.no_grad():
+        sample, _, _ = net.sample(n=80, z=z, c=targets)
+        gt, _, _ = data_generator.sample(n=80, z=z, c=targets)
+    if opt.cuda:
+        sample = sample.cpu()
+        gt = gt.cpu()
+    images = sample.clone()
+    images[::2] = sample[:40]
+    images[1::2] = gt[:40]
+    save_image(images.data.view(80, nc, 32, 32), opt.outf + 'sample_' + id + '.png', nrow=8)
+
+
+def train_twins(net, iterations, tensorboard_id=None, first_exp=True):
     """Clones net, trains it on two splits separately as twins, compares the result"""
 
     net_twin_1 = clone_network(net)
@@ -305,12 +354,17 @@ def train_twins(net, iterations, tensorboard_id=None):
 
     converged1, converged2 = False, False
 
-    for i in range(100):
+    for i in range(500):
         # Train theta on the two sets of the data
         if not converged1:
-            converged1 = train_net(net_twin_1, distribution=split_1, optimizer=optim_1, scheduler=sched_1, iterations=iterations, threshold=0.13)
+            converged1 = train_net(net_twin_1, distribution=split_1, optimizer=optim_1, scheduler=sched_1, iterations=iterations, threshold=opt.threshold)
+            if first_exp:
+                save_samples(net_twin_1, distribution='all', id=tensorboard_id.replace('/', '') + '_split1_it' + str(i))
+        # Here twin two is trained on both at the same time
         if not converged2:
-            converged2 = train_net(net_twin_2, distribution=split_2, optimizer=optim_2, scheduler=sched_2, iterations=iterations, threshold=0.13)
+            converged2 = train_net(net_twin_2, distribution=restrict_gaussian_range, optimizer=optim_2, scheduler=sched_2, iterations=iterations, threshold=opt.threshold)
+            if first_exp:
+                save_samples(net_twin_2, distribution='all', id=tensorboard_id.replace('/','') + '_restricted_it' + str(i))
 
         disagreement_error.append(
             compare_networks(net_twin_1, net_twin_2, data=test_both_splits_img, z=test_both_splits_z,
@@ -319,7 +373,8 @@ def train_twins(net, iterations, tensorboard_id=None):
         if tensorboard_id is not None:
             writer.add_scalar(tensorboard_id + '/disagreement_error', disagreement_error[-1], net_twin_1.curr_iteration)
 
-    return disagreement_error, net_twin_1.valid_err_split_1, net_twin_1.valid_err_split_2
+
+    return disagreement_error, net_twin_1.valid_err_split_1, net_twin_1.valid_err_split_2, net_twin_1.valid_err_split_full
 
 
 # plt.close()
@@ -380,16 +435,16 @@ if opt.task == 'classification':
 else:
     # print("Skip pre-training of theta star, start from loaded ground truth")
     # For the VAE we don't retrain but simply load
-    theta_star = VAE(device=None)
+    theta_star = VAE(device=None, architecture='standard', color_channels=nc)
     theta_star.to(device)
     theta_star.device = device
     # theta_star.load_state_dict(torch.load(opt.c_vae_path))
-    if opt.no_train_all:
-        print('Load pre-trained theta star')
-        theta_star.load_state_dict(torch.load('%s/theta_star.pth' % (opt.outf)))
-    else:
-        train_generator(theta_star, distribution='all', threshold=0.13,
-                        iterations=50000 if not opt.debug else 1000)
+    # if opt.no_train_all:
+    #     print('Load pre-trained theta star')
+    #     theta_star.load_state_dict(torch.load('%s/theta_star.pth' % (opt.outf)))
+    # else:
+    #     train_generator(theta_star, distribution=restrict_gaussian_range, threshold=opt.threshold,
+    #                     iterations=50000 if not opt.debug else 1000)
 
 # Save the weights
 torch.save(theta_star.state_dict(), '%s/theta_star.pth' % (opt.outf))
@@ -400,20 +455,20 @@ if opt.task == 'classification':
     theta_all = _classifier()
     theta_all.to(device)
     # Train theta all on the restricted set of the data
-    optim_all = _optimizer(theta_all, lr=0.01)
+    optim_all = _optimizer(theta_all)
     sched_all = _scheduler(optim_all)
     train_classifier(theta_all, distribution=restrict_gaussian_range, iterations=10000 if not opt.debug else 100,
                      optimizer=optim_all, _scheduler=sched_all)
 else:
-    theta_all = VAE(device=None)
+    theta_all = VAE(device=None, architecture='fully_connected',color_channels=nc) #, activ=F.leaky_relu)
     theta_all.to(device)
     theta_all.device = device
-    optim_all = _optimizer(theta_all, lr=0.01)
-    if opt.no_train_all:
-        print('Load pre-trained theta all')
-        theta_all.load_state_dict(torch.load('%s/theta_all.pth' % (opt.outf)))
-    else:
-        train_generator(theta_all, distribution=restrict_gaussian_range, threshold=0.13, iterations=50000 if not opt.debug else 1000)
+    optim_all = _optimizer(theta_all)
+    # if opt.no_train_all:
+    #     print('Load pre-trained theta all')
+    #     theta_all.load_state_dict(torch.load('%s/theta_all.pth' % (opt.outf)))
+    # else:
+    #     train_generator(theta_all, distribution=restrict_gaussian_range, threshold=opt.threshold, iterations=50000 if not opt.debug else 1000)
 
 # Save the weights
 if not opt.no_train_all:
@@ -433,11 +488,55 @@ compare_networks(theta_star, theta_all, data=test_both_splits_img, z=test_both_s
 #           keep track of *all* validation measures
 #           keep track of *cross-error on the other splits*
 
-print("Twin study")
+print("# Diff study")
 
-epsilons_to_test = [i * 0.05 for i in range(1, 5)]
+epsilons_to_test = [0.0]
 disagreement_error_star, disagreement_error_star_std = [], []
 disagreement_error_all, disagreement_error_all_std = [], []
+
+
+def plot_valid_scores():
+    # Save figure for validation scores
+    plt.close()
+    plt.figure()
+    plt.title('Twin 1 on splits 1 and 2 for eps std' + str(eps))
+    plt.xlabel('Iterations')
+    plt.ylabel('Mean squared error')
+
+    plt.plot(np.mean(pad_all_sublists(valid_scores_twin_1_on_split_1_star), 0), label='Twin 1 Star on split 1', c='b')
+    plt.fill_between(range(len(np.mean(valid_scores_twin_1_on_split_1_star, 0))),
+                     np.mean(valid_scores_twin_1_on_split_1_star, 0) - np.std(valid_scores_twin_1_on_split_1_star, 0),
+                     np.mean(valid_scores_twin_1_on_split_1_star, 0) + np.std(valid_scores_twin_1_on_split_1_star, 0),
+                     alpha=0.3, facecolor='b')
+    plt.plot(np.mean(pad_all_sublists(valid_scores_twin_1_on_split_2_star), 0), label='Twin 1 Star on split 2', c='b', ls='--')
+    plt.fill_between(range(len(np.mean(valid_scores_twin_1_on_split_2_star, 0))),
+                     np.mean(valid_scores_twin_1_on_split_2_star, 0) - np.std(valid_scores_twin_1_on_split_2_star, 0),
+                     np.mean(valid_scores_twin_1_on_split_2_star, 0) + np.std(valid_scores_twin_1_on_split_2_star, 0),
+                     alpha=0.3, facecolor='b')
+    plt.plot(np.mean(pad_all_sublists(valid_scores_twin_1_on_full_star), 0), label='Twin 1 Star on full', c='b',
+             ls=':')
+    plt.fill_between(range(len(np.mean(valid_scores_twin_1_on_full_star, 0))),
+                     np.mean(valid_scores_twin_1_on_full_star, 0) - np.std(valid_scores_twin_1_on_full_star, 0),
+                     np.mean(valid_scores_twin_1_on_full_star, 0) + np.std(valid_scores_twin_1_on_full_star, 0),
+                     alpha=0.3, facecolor='b')
+    plt.plot(np.mean(pad_all_sublists(valid_scores_twin_1_on_split_1_all), 0), label='Twin 1 All on split 1', c='r')
+    plt.fill_between(range(len(np.mean(valid_scores_twin_1_on_split_1_all, 0))),
+                     np.mean(valid_scores_twin_1_on_split_1_all, 0) - np.std(valid_scores_twin_1_on_split_1_all, 0),
+                     np.mean(valid_scores_twin_1_on_split_1_all, 0) + np.std(valid_scores_twin_1_on_split_1_all, 0),
+                     alpha=0.3, facecolor='r')
+    plt.plot(np.mean(pad_all_sublists(valid_scores_twin_1_on_split_2_all), 0), label='Twin 1 All on split 2', c='r', ls='--')
+    plt.fill_between(range(len(np.mean(valid_scores_twin_1_on_split_2_all, 0))),
+                     np.mean(valid_scores_twin_1_on_split_2_all, 0) - np.std(valid_scores_twin_1_on_split_2_all, 0),
+                     np.mean(valid_scores_twin_1_on_split_2_all, 0) + np.std(valid_scores_twin_1_on_split_2_all, 0),
+                     alpha=0.3, facecolor='r')
+    plt.plot(np.mean(pad_all_sublists(valid_scores_twin_1_on_full_all), 0), label='Twin 1 All on full', c='r', ls=':')
+    plt.fill_between(range(len(np.mean(valid_scores_twin_1_on_full_all, 0))),
+                     np.mean(valid_scores_twin_1_on_full_all, 0) - np.std(valid_scores_twin_1_on_full_all, 0),
+                     np.mean(valid_scores_twin_1_on_full_all, 0) + np.std(valid_scores_twin_1_on_full_all, 0),
+                     alpha=0.3, facecolor='r')
+    plt.legend()
+    plt.savefig(opt.outf + 'twins_1_eps_' + str(eps) + '.png')
+
 
 for i, eps in enumerate(epsilons_to_test):
     disagreement_error_star_local = []
@@ -446,6 +545,8 @@ for i, eps in enumerate(epsilons_to_test):
     valid_scores_twin_1_on_split_1_all = []
     valid_scores_twin_1_on_split_2_star = []
     valid_scores_twin_1_on_split_2_all = []
+    valid_scores_twin_1_on_full_star = []
+    valid_scores_twin_1_on_full_all  = []
     repetitions = opt.repetitions if not opt.debug else 2
     for rep in range(repetitions):
         print("Eps std", eps, 'Repetition:', rep + 1, '/', repetitions)
@@ -465,30 +566,25 @@ for i, eps in enumerate(epsilons_to_test):
         add_noise_weights(theta_all_eps, eps_sigma=eps)
 
         print("Train star twins")
-        disagreement, valid_split_1, valid_split_2 = train_twins(theta_star_eps,
+        disagreement, valid_split_1, valid_split_2, valid_split_full = train_twins(theta_star_eps, first_exp=(rep==0),
                                                                  iterations=5 if not opt.debug else 5,
                                                                  tensorboard_id='eps_std{:.4}/Star'.format(eps))
         disagreement_error_star_local.append(disagreement)
         valid_scores_twin_1_on_split_1_star.append(valid_split_1)
         valid_scores_twin_1_on_split_2_star.append(valid_split_2)
+        valid_scores_twin_1_on_full_star.append(valid_split_full)
 
         print("Train all twins")
-        disagreement, valid_split_1, valid_split_2 = train_twins(theta_all_eps, iterations=5 if not opt.debug else 5,
+        disagreement, valid_split_1, valid_split_2, valid_split_full = train_twins(theta_all_eps,  first_exp=(rep==0),
+                                                                 iterations=5 if not opt.debug else 5,
                                                                  tensorboard_id='eps_std{:.4}/All'.format(eps))
         # Stack results for future averaging
         disagreement_error_all_local.append(disagreement)
         valid_scores_twin_1_on_split_1_all.append(valid_split_1)
         valid_scores_twin_1_on_split_2_all.append(valid_split_2)
+        valid_scores_twin_1_on_full_all.append(valid_split_full)
 
-
-    def pad_all_sublists(super_list):
-        max_len = 0
-        for l in super_list:
-            if len(l) > max_len:
-                max_len = len(l)
-        for l in super_list:
-            l += [l[-1]] * (max_len - len(l))
-        return super_list
+        plot_valid_scores()
 
     disagreement_error_star.append(np.mean(pad_all_sublists(disagreement_error_star_local), 0))
     disagreement_error_all.append(np.mean(pad_all_sublists(disagreement_error_all_local), 0))
@@ -514,34 +610,5 @@ for i, eps in enumerate(epsilons_to_test):
     plt.legend()
     plt.savefig(opt.outf + 'eps_std{:.4}'.format(epsilons_to_test[i]) + '.png')
 
-    # Save figure for validation scores
-    plt.close()
-    plt.figure()
-    plt.title('Twin 1 on splits 1 and 2 for eps std' + str(eps))
-    plt.xlabel('Iterations')
-    plt.ylabel('Mean squared error')
-
-    plt.plot(np.mean(pad_all_sublists(valid_scores_twin_1_on_split_1_star), 0), label='Twin 1 Star on split 1', c='b')
-    plt.fill_between(range(len(np.mean(valid_scores_twin_1_on_split_1_star, 0))),
-                     np.mean(valid_scores_twin_1_on_split_1_star, 0) - np.std(valid_scores_twin_1_on_split_1_star, 0),
-                     np.mean(valid_scores_twin_1_on_split_1_star, 0) + np.std(valid_scores_twin_1_on_split_1_star, 0),
-                     alpha=0.3, facecolor='b')
-    plt.plot(np.mean(pad_all_sublists(valid_scores_twin_1_on_split_2_star), 0), label='Twin 1 Star on split 2', c='b', ls='--')
-    plt.fill_between(range(len(np.mean(valid_scores_twin_1_on_split_2_star, 0))),
-                     np.mean(valid_scores_twin_1_on_split_2_star, 0) - np.std(valid_scores_twin_1_on_split_2_star, 0),
-                     np.mean(valid_scores_twin_1_on_split_2_star, 0) + np.std(valid_scores_twin_1_on_split_2_star, 0),
-                     alpha=0.3, facecolor='b')
-    plt.plot(np.mean(pad_all_sublists(valid_scores_twin_1_on_split_1_all), 0), label='Twin 1 All on split 1', c='r')
-    plt.fill_between(range(len(np.mean(valid_scores_twin_1_on_split_1_all, 0))),
-                     np.mean(valid_scores_twin_1_on_split_1_all, 0) - np.std(valid_scores_twin_1_on_split_1_all, 0),
-                     np.mean(valid_scores_twin_1_on_split_1_all, 0) + np.std(valid_scores_twin_1_on_split_1_all, 0),
-                     alpha=0.3, facecolor='r')
-    plt.plot(np.mean(pad_all_sublists(valid_scores_twin_1_on_split_2_all), 0), label='Twin 1 All on split 2', c='r', ls='--')
-    plt.fill_between(range(len(np.mean(valid_scores_twin_1_on_split_2_all, 0))),
-                     np.mean(valid_scores_twin_1_on_split_2_all, 0) - np.std(valid_scores_twin_1_on_split_2_all, 0),
-                     np.mean(valid_scores_twin_1_on_split_2_all, 0) + np.std(valid_scores_twin_1_on_split_2_all, 0),
-                     alpha=0.3, facecolor='r')
-    plt.legend()
-    plt.savefig(opt.outf + 'twins_1_eps_' + str(eps) + '.png')
 
 writer.close()

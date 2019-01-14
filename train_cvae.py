@@ -15,6 +15,8 @@ from IPython import embed
 parser = argparse.ArgumentParser(description='VAE MNIST Example')
 parser.add_argument('--batch-size', type=int, default=128, metavar='N',
                     help='input batch size for training (default: 132)')
+parser.add_argument('--dataset', type=str, default='mnist', metavar='N',
+                    help='mnist | cifar10')
 parser.add_argument('--epochs', type=int, default=10, metavar='N',
                     help='number of epochs to train (default: 10)')
 parser.add_argument('--beta', type=float, default=1.,
@@ -25,7 +27,7 @@ parser.add_argument('--seed', type=int, default=1, metavar='S',
                     help='random seed (default: 1)')
 parser.add_argument('--log-interval', type=int, default=10, metavar='N',
                     help='how many batches to wait before logging training status')
-parser.add_argument('--path_img',   default='/is/cluster/gparascandolo/generative-models/GAN/R_out/VAEs/CVAE/',
+parser.add_argument('--path_img',   default='/is/cluster/gparascandolo/ood_validation_diff_nets/VAEs/',
                     help='Path', type=str)
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
@@ -46,17 +48,48 @@ if torch.cuda.is_available() and not args.cuda:
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-kwargs = {'num_workers': 1, 'pin_memory': True} if args.cuda else {}
-train_loader = torch.utils.data.DataLoader(
-    datasets.MNIST(root='/is/cluster/gparascandolo/mnist/', train=True, download=False,
-                   transform=transforms.Compose([transforms.Pad(padding=2),
-                                                 transforms.ToTensor()])),
-                   batch_size=args.batch_size, shuffle=True, **kwargs)
-test_loader = torch.utils.data.DataLoader(
-    datasets.MNIST(root='/is/cluster/gparascandolo/mnist/', train=False, transform=transforms.Compose([transforms.Pad(padding=2),transforms.ToTensor()])),
-                   batch_size=args.batch_size, shuffle=True, **kwargs)
-num_classes = 10
-
+kwargs = {'num_workers': 2, 'pin_memory': True} if args.cuda else {}
+if args.dataset == 'mnist':
+    num_classes = 10
+    train_loader = torch.utils.data.DataLoader(
+        datasets.MNIST(root='/is/cluster/gparascandolo/mnist/', train=True, download=False,
+                       transform=transforms.Compose([transforms.Pad(padding=2),
+                                                     transforms.ToTensor()])),
+                       batch_size=args.batch_size, shuffle=True, **kwargs)
+    test_loader = torch.utils.data.DataLoader(
+        datasets.MNIST(root='/is/cluster/gparascandolo/mnist/', train=False,
+                       transform=transforms.Compose([transforms.Pad(padding=2),transforms.ToTensor()])),
+                       batch_size=args.batch_size, shuffle=True, **kwargs)
+    color_channels = 1
+elif args.dataset == 'cifar10':
+    num_classes = 10
+    train_loader = torch.utils.data.DataLoader(datasets.CIFAR10(root='/is/cluster/gparascandolo/cifar10/', download=False, train=True,
+                           transform=transforms.Compose([
+                               transforms.Scale(32),
+                               transforms.ToTensor(),
+                               # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                               # transforms.Lambda(lambda x: torch.mean(x, dim=0).view(1, 32, 32)),
+                           ])), batch_size=args.batch_size, shuffle=True, **kwargs)
+    test_loader = torch.utils.data.DataLoader(datasets.CIFAR10(root='/is/cluster/gparascandolo/cifar10/', train=False, download=False,
+                                transform=transforms.Compose([
+                                    transforms.Scale(32),
+                                    transforms.ToTensor(),
+                                    # transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+                                    # transforms.Lambda(lambda x: torch.mean(x, dim=0).view(1, 32, 32)),
+                                ])), batch_size=args.batch_size, shuffle=True, **kwargs)
+    color_channels = 3
+elif args.dataset == 'celeba':
+    train_loader = torch.utils.data.DataLoader(datasets.ImageFolder(root='/is/cluster/gparascandolo/BEGAN-pytorch/data',
+                               transform=transforms.Compose([
+                                   transforms.CenterCrop(128),
+                                   transforms.Scale(32),
+                                   # transforms.RandomHorizontalFlip(),
+                                   transforms.ToTensor(),
+                               ])), batch_size=args.batch_size, shuffle=True, **kwargs)
+    test_loader = train_loader
+    color_channels = 3
+else:
+    raise ValueError('Unknown dataset')
 
 # def idx2onehot(idx, n):
 #     assert idx.size(1) == 1
@@ -66,12 +99,12 @@ num_classes = 10
 #     onehot = torch.Tensor(onehot)
 #     return onehot
 
-model = VAE(device=device)
+model = VAE(device=device, color_channels=color_channels)
 model.to(device)
 
 
 def loss_function(recon_x, x, mu, logvar, beta=1.0):
-    BCE = F.binary_cross_entropy(recon_x, x.view(-1, 32*32))
+    BCE = F.binary_cross_entropy(recon_x, x.view(-1, 32*32*color_channels))
 
     # see Appendix B from VAE paper:
     # Kingma and Welling. Auto-Encoding Variational Bayes. ICLR, 2014
@@ -79,7 +112,7 @@ def loss_function(recon_x, x, mu, logvar, beta=1.0):
     # 0.5 * sum(1 + log(sigma^2) - mu^2 - sigma^2)
     KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
     # Normalise by same number of elements as in reconstruction
-    KLD /= args.batch_size * 32*32
+    KLD /= args.batch_size * 32*32*color_channels
 
     return BCE + beta * KLD
 
@@ -123,9 +156,11 @@ def test(epoch):
             test_loss += loss_function(recon_batch, data, mu, logvar, beta=args.beta).item()
             if i == 0:
                 n = min(data.size(0), 8)
-                comparison = torch.cat([data[:n], recon_batch.view(args.batch_size, 1, 32, 32)[:n]])
+                comparison = torch.cat([data[:n], recon_batch.view(args.batch_size, color_channels, 32, 32)[:n]])
                 save_image(comparison.data.cpu(),
                              args.path_img + 'reconstruction_' + str(epoch) + '.png', nrow=n)
+            if args.dataset == 'celeba':
+                break
     test_loss /= len(test_loader.dataset)
     print('====> Test set loss: {:.4f}'.format(test_loss))
 
@@ -140,8 +175,8 @@ for epoch in range(1, args.epochs + 1):
     sample, _, _ = model.sample(n=80, c=targets)
     if args.cuda:
         sample = sample.cpu()
-    save_image(sample.data.view(80, 1, 32, 32), args.path_img + 'sample_' + str(epoch) + '.png', nrow=8)
+    save_image(sample.data.view(80, color_channels, 32, 32), args.path_img + 'sample_' + str(epoch) + '.png', nrow=8)
 
-    torch.save(model.state_dict(), '%s/CVAE.pth' % (args.path_img))
+    torch.save(model.state_dict(), '%s/CVAE_%s.pth' % (args.path_img, args.dataset))
 
 
